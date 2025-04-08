@@ -53,6 +53,38 @@ var ensureOrderBatchPool = sync.Pool{
 	},
 }
 
+// Pool for ListPostings objects
+var listPostingsPool = sync.Pool{
+	New: func() interface{} {
+		return &ListPostings{}
+	},
+}
+
+// Pool for bigEndianPostings objects
+var bigEndianPostingsPool = sync.Pool{
+	New: func() interface{} {
+		return &bigEndianPostings{}
+	},
+}
+
+// recycle returns the ListPostings to the pool after resetting its state.
+// This is an internal method, not part of the public API.
+func (it *ListPostings) recycle() {
+	// Reset state before returning to pool
+	it.list = nil
+	it.cur = 0
+	listPostingsPool.Put(it)
+}
+
+// recycle returns the bigEndianPostings to the pool after resetting its state.
+// This is an internal method, not part of the public API.
+func (it *bigEndianPostings) recycle() {
+	// Reset state before returning to pool
+	it.list = nil
+	it.cur = 0
+	bigEndianPostingsPool.Put(it)
+}
+
 // MemPostings holds postings list for series ID per label pair. They may be written
 // to out of order.
 // EnsureOrder() must be called once before any reads are done. This allows for quick
@@ -636,6 +668,11 @@ Loop:
 func (it *intersectPostings) Next() bool {
 	for _, p := range it.arr {
 		if !p.Next() {
+			if lp, ok := p.(*ListPostings); ok {
+				lp.recycle()
+			} else if bep, ok := p.(*bigEndianPostings); ok {
+				bep.recycle()
+			}
 			return false
 		}
 		if p.At() > it.cur {
@@ -767,6 +804,11 @@ func (rp *removedPostings) Next() bool {
 	}
 	for {
 		if !rp.fok {
+			if lp, ok := rp.full.(*ListPostings); ok {
+				lp.recycle()
+			} else if bep, ok := rp.full.(*bigEndianPostings); ok {
+				bep.recycle()
+			}
 			return false
 		}
 
@@ -822,7 +864,13 @@ func NewListPostings(list []storage.SeriesRef) Postings {
 }
 
 func newListPostings(list ...storage.SeriesRef) *ListPostings {
-	return &ListPostings{list: list}
+	lp := listPostingsPool.Get().(*ListPostings)
+
+	// Set up the struct with the input list and reset cur to 0.
+	lp.list = list
+	lp.cur = 0
+
+	return lp
 }
 
 func (it *ListPostings) At() storage.SeriesRef {
@@ -876,7 +924,12 @@ type bigEndianPostings struct {
 }
 
 func newBigEndianPostings(list []byte) *bigEndianPostings {
-	return &bigEndianPostings{list: list}
+	p := bigEndianPostingsPool.Get().(*bigEndianPostings)
+
+	p.list = list
+	p.cur = 0
+
+	return p
 }
 
 func (it *bigEndianPostings) At() storage.SeriesRef {
